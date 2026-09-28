@@ -613,28 +613,6 @@ Actual industrial operations must always follow applicable safety standards and 
 
 ---
 
-👥 Team ARAKSHA
-
-Team Leader
-
-Shrijan Kumar
-
-Team Members
-
-Shreya Kumari
-
-Anjali Kumari
-
-Vivek Kumar Rana
-
-Preety Agarwal
-
-Gambhir Kumar
-
-
-
----
-
 🛡️ ARAKSHA
 
 SURAKSHA-AR
