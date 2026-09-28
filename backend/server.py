@@ -1,4 +1,5 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Query, Depends, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -9,7 +10,9 @@ import random
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import bcrypt
+from jose import jwt, JWTError
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -23,6 +26,12 @@ api_router = APIRouter(prefix="/api")
 
 PASS_THRESHOLD = int(os.environ.get("PASS_THRESHOLD", "70"))
 ORG_NAME = "SURAKSHA AR — Vocational Safety Training"
+ADMIN_ID = os.environ.get("ADMIN_ID", "admin")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Suraksha@2026")
+JWT_SECRET = os.environ.get("JWT_SECRET", "suraksha-dev-secret")
+JWT_MINUTES = int(os.environ.get("JWT_MINUTES", "720"))
+ALGORITHM = "HS256"
+bearer = HTTPBearer(auto_error=False)
 
 
 def now_iso() -> str:
@@ -67,6 +76,11 @@ class CertificateCreate(BaseModel):
     language: Optional[str] = "en"
 
 
+class AdminLoginIn(BaseModel):
+    id: str
+    password: str
+
+
 # ------------------------- Helpers -------------------------
 def clean(doc: dict) -> dict:
     if doc and "_id" in doc:
@@ -79,6 +93,54 @@ async def next_cert_id() -> str:
     seq = 124 + count  # start near demo sample for credibility
     year = datetime.now(timezone.utc).year
     return f"JH-SAFE-{year}-{seq:06d}"
+
+
+# ------------------------- Admin Auth -------------------------
+async def seed_admin() -> None:
+    hashed = bcrypt.hashpw(ADMIN_PASSWORD.encode(), bcrypt.gensalt()).decode()
+    await db.admins.update_one(
+        {"adminId": ADMIN_ID},
+        {"$set": {"adminId": ADMIN_ID, "passwordHash": hashed, "role": "admin"}},
+        upsert=True,
+    )
+
+
+def issue_admin_token(admin_id: str) -> str:
+    now = datetime.now(timezone.utc)
+    payload = {"sub": admin_id, "role": "admin", "iat": now, "exp": now + timedelta(minutes=JWT_MINUTES)}
+    return jwt.encode(payload, JWT_SECRET, algorithm=ALGORITHM)
+
+
+async def require_admin(creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer)):
+    unauthorized = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or expired admin session",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    if not creds or creds.scheme.lower() != "bearer":
+        raise unauthorized
+    try:
+        payload = jwt.decode(creds.credentials, JWT_SECRET, algorithms=[ALGORITHM])
+        if payload.get("role") != "admin" or not payload.get("sub"):
+            raise unauthorized
+    except (JWTError, ValueError):
+        raise unauthorized
+    return payload["sub"]
+
+
+@api_router.post("/admin/login")
+async def admin_login(body: AdminLoginIn):
+    admin = await db.admins.find_one({"adminId": body.id.strip()})
+    stored = admin["passwordHash"] if admin else bcrypt.hashpw(b"dummy-password", bcrypt.gensalt()).decode()
+    valid = bcrypt.checkpw(body.password.encode(), stored.encode())
+    if not admin or not valid:
+        raise HTTPException(status_code=401, detail="Invalid ID or password")
+    return {"access_token": issue_admin_token(body.id.strip()), "token_type": "bearer", "expires_in": JWT_MINUTES * 60}
+
+
+@api_router.get("/admin/me")
+async def admin_me(admin_id: str = Depends(require_admin)):
+    return {"adminId": admin_id, "role": "admin"}
 
 
 # ------------------------- Routes -------------------------
@@ -162,7 +224,7 @@ async def verify_certificate(cert_id: str):
 
 # ------------------------- Admin -------------------------
 @api_router.get("/admin/stats")
-async def admin_stats():
+async def admin_stats(_: str = Depends(require_admin)):
     total_workers = await db.users.count_documents({})
     certs = await db.certificates.count_documents({})
     attempts = await db.attempts.find().to_list(10000)
@@ -179,7 +241,7 @@ async def admin_stats():
 
 
 @api_router.get("/admin/workers")
-async def admin_workers():
+async def admin_workers(_: str = Depends(require_admin)):
     users = await db.users.find().sort("createdAt", -1).to_list(2000)
     result = []
     for u in users:
@@ -199,7 +261,7 @@ async def admin_workers():
 
 
 @api_router.get("/admin/certificates")
-async def admin_certificates(query: str = Query("")):
+async def admin_certificates(query: str = Query(""), _: str = Depends(require_admin)):
     q = query.strip()
     filt = {}
     if q:
@@ -213,7 +275,7 @@ async def admin_certificates(query: str = Query("")):
 
 
 @api_router.get("/admin/analytics")
-async def admin_analytics():
+async def admin_analytics(_: str = Depends(require_admin)):
     attempts = await db.attempts.find().to_list(10000)
     by_module = {}
     for a in attempts:
@@ -282,6 +344,11 @@ app.add_middleware(
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+
+@app.on_event("startup")
+async def startup():
+    await seed_admin()
 
 
 @app.on_event("shutdown")

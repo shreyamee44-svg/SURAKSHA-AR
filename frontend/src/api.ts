@@ -46,6 +46,42 @@ const PROFILE_KEY = "suraksha.profile";
 const ATTEMPTS_KEY = "suraksha.attempts";
 const CERTS_KEY = "suraksha.certs";
 export const LAST_RESULT_KEY = "suraksha.lastResult";
+const ADMIN_TOKEN_KEY = "suraksha.adminToken";
+
+// ---------------- Admin Auth ----------------
+export async function adminLogin(id: string, password: string): Promise<string> {
+  const res = await req<{ access_token: string }>("/admin/login", {
+    method: "POST",
+    body: JSON.stringify({ id, password }),
+  });
+  await storage.secureSet(ADMIN_TOKEN_KEY, res.access_token);
+  return res.access_token;
+}
+
+export async function getAdminToken(): Promise<string | null> {
+  return storage.secureGet<string | null>(ADMIN_TOKEN_KEY, null);
+}
+
+export async function adminLogout(): Promise<void> {
+  await storage.secureRemove(ADMIN_TOKEN_KEY);
+}
+
+export async function adminGet<T>(path: string): Promise<T> {
+  const token = await getAdminToken();
+  const res = await fetch(`${API}${path}`, { headers: { Authorization: `Bearer ${token || ""}` } });
+  if (res.status === 401) throw new Error("unauthorized");
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()) as T;
+}
+
+export async function adminMe(): Promise<boolean> {
+  try {
+    await adminGet("/admin/me");
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 async function req<T>(path: string, options?: RequestInit, timeoutMs = 8000): Promise<T> {
   const controller = new AbortController();

@@ -141,6 +141,22 @@ const S: Dict = {
     sat: "ᱱᱚᱶᱟ ᱮᱠᱲᱟᱣ ᱛᱟᱞᱤᱢ ᱞᱟᱹᱜᱤᱫ ᱠᱷᱟᱱ। ᱥᱟᱹᱴ ᱛᱮ ᱥᱚᱦᱚᱛ ᱥᱚᱦᱚᱛ SOP ᱢᱟᱱ।",
   },
   ppeNote: { en: "Real industrial work must follow workplace SOPs and trained supervision.", hi: "वास्तविक कार्य में कार्यस्थल SOP और प्रशिक्षित पर्यवेक्षण का पालन करें।", sat: "ᱠᱟᱹᱢᱤ ᱛᱮ SOP ᱢᱟᱱ" },
+
+  // Role selection & admin login
+  chooseRole: { en: "Who are you?", hi: "आप कौन हैं?", sat: "ᱟᱢ ᱠᱚᱱ?" },
+  roleSubtitle: { en: "Select your role to continue", hi: "जारी रखने के लिए अपनी भूमिका चुनें", sat: "ᱟᱭᱩᱨ ᱞᱟᱹᱜᱤᱫ ᱵᱟᱪᱷᱟᱣ" },
+  workerRole: { en: "Worker", hi: "कर्मचारी", sat: "ᱠᱟᱹᱢᱤᱭᱟᱹ" },
+  workerRoleDesc: { en: "Start safety training & certificates", hi: "सुरक्षा प्रशिक्षण और प्रमाण पत्र शुरू करें", sat: "ᱛᱟᱞᱤᱢ ᱮᱦᱚᱵ" },
+  adminRole: { en: "Admin", hi: "एडमिन", sat: "ᱮᱰᱢᱤᱱ" },
+  adminRoleDesc: { en: "Coordinator dashboard & compliance", hi: "कोऑर्डिनेटर डैशबोर्ड और अनुपालन", sat: "ᱰᱮᱥᱵᱚᱰ" },
+  adminLogin: { en: "Admin Login", hi: "एडमिन लॉगिन", sat: "ᱮᱰᱢᱤᱱ ᱞᱚᱜᱤᱱ" },
+  adminLoginSub: { en: "Coordinators & training admins only", hi: "केवल कोऑर्डिनेटर और प्रशिक्षण एडमिन", sat: "ᱠᱚᱱᱴᱨᱚᱞ ᱞᱟᱹᱜᱤᱫ" },
+  adminId: { en: "Admin ID", hi: "एडमिन आईडी", sat: "ᱮᱰᱢᱤᱱ ID" },
+  password: { en: "Password", hi: "पासवर्ड", sat: "ᱯᱟᱥᱣᱟᱨᱰ" },
+  signIn: { en: "Sign In", hi: "साइन इन करें", sat: "ᱚᱛᱟᱭ" },
+  signOut: { en: "Sign Out", hi: "साइन आउट", sat: "ᱵᱟᱦᱨᱮ" },
+  invalidCreds: { en: "Invalid ID or password", hi: "गलत आईडी या पासवर्ड", sat: "ᱵᱷᱩᱞ ID ᱥᱮ ᱯᱟᱥᱣᱟᱨᱰ" },
+  enterIdPass: { en: "Enter admin ID and password", hi: "एडमिन आईडी और पासवर्ड डालें", sat: "ID ᱟᱨ ᱯᱟᱥᱣᱟᱨᱰ ᱚᱞ" },
 };
 
 type Ctx = {
