@@ -1,0 +1,289 @@
+from fastapi import FastAPI, APIRouter, HTTPException, Query
+from dotenv import load_dotenv
+from starlette.middleware.cors import CORSMiddleware
+from motor.motor_asyncio import AsyncIOMotorClient
+import os
+import logging
+import uuid
+import random
+from pathlib import Path
+from pydantic import BaseModel, Field
+from typing import List, Optional
+from datetime import datetime, timezone
+
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / ".env")
+
+mongo_url = os.environ["MONGO_URL"]
+client = AsyncIOMotorClient(mongo_url)
+db = client[os.environ["DB_NAME"]]
+
+app = FastAPI(title="SURAKSHA AR")
+api_router = APIRouter(prefix="/api")
+
+PASS_THRESHOLD = int(os.environ.get("PASS_THRESHOLD", "70"))
+ORG_NAME = "SURAKSHA AR — Vocational Safety Training"
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+# ------------------------- Models -------------------------
+class UserCreate(BaseModel):
+    name: str
+    workerId: str
+    language: str = "en"
+    ageGroup: Optional[str] = None
+    sector: Optional[str] = None
+    organization: Optional[str] = None
+
+
+class User(UserCreate):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    createdAt: str = Field(default_factory=now_iso)
+
+
+class AttemptCreate(BaseModel):
+    userId: str
+    workerName: Optional[str] = None
+    moduleId: str
+    moduleTitle: Optional[str] = None
+    score: int
+    correct: int
+    total: int
+    passed: bool
+    durationSec: Optional[int] = 0
+    language: Optional[str] = "en"
+
+
+class CertificateCreate(BaseModel):
+    userId: str
+    name: str
+    workerId: Optional[str] = None
+    moduleId: str
+    moduleTitle: str
+    score: int
+    language: Optional[str] = "en"
+
+
+# ------------------------- Helpers -------------------------
+def clean(doc: dict) -> dict:
+    if doc and "_id" in doc:
+        doc = {k: v for k, v in doc.items() if k != "_id"}
+    return doc
+
+
+async def next_cert_id() -> str:
+    count = await db.certificates.count_documents({})
+    seq = 124 + count  # start near demo sample for credibility
+    year = datetime.now(timezone.utc).year
+    return f"JH-SAFE-{year}-{seq:06d}"
+
+
+# ------------------------- Routes -------------------------
+@api_router.get("/")
+async def root():
+    return {"message": "SURAKSHA AR API", "passThreshold": PASS_THRESHOLD, "org": ORG_NAME}
+
+
+@api_router.get("/config")
+async def config():
+    return {"passThreshold": PASS_THRESHOLD, "org": ORG_NAME}
+
+
+@api_router.post("/users", response_model=User)
+async def create_user(payload: UserCreate):
+    existing = await db.users.find_one({"workerId": payload.workerId})
+    if existing:
+        return User(**clean(existing))
+    user = User(**payload.dict())
+    await db.users.insert_one(user.dict())
+    return user
+
+
+@api_router.get("/users/{user_id}", response_model=User)
+async def get_user(user_id: str):
+    doc = await db.users.find_one({"id": user_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="User not found")
+    return User(**clean(doc))
+
+
+@api_router.post("/attempts")
+async def create_attempt(payload: AttemptCreate):
+    prior = await db.attempts.find({"userId": payload.userId, "moduleId": payload.moduleId}).to_list(1000)
+    attempts_count = len(prior) + 1
+    record = payload.dict()
+    record.update({
+        "id": str(uuid.uuid4()),
+        "attempts": attempts_count,
+        "completedAt": now_iso(),
+    })
+    await db.attempts.insert_one(record)
+    return clean(record)
+
+
+@api_router.get("/attempts")
+async def list_attempts(userId: str = Query(...)):
+    docs = await db.attempts.find({"userId": userId}).to_list(1000)
+    return [clean(d) for d in docs]
+
+
+@api_router.post("/certificates")
+async def create_certificate(payload: CertificateCreate):
+    cert_id = await next_cert_id()
+    record = payload.dict()
+    record.update({
+        "certificateId": cert_id,
+        "issueDate": now_iso(),
+        "verificationStatus": "VERIFIED",
+        "org": ORG_NAME,
+    })
+    await db.certificates.insert_one(record)
+    return clean(record)
+
+
+@api_router.get("/certificates")
+async def list_certificates(userId: str = Query(...)):
+    docs = await db.certificates.find({"userId": userId}).sort("issueDate", -1).to_list(1000)
+    return [clean(d) for d in docs]
+
+
+@api_router.get("/certificates/verify/{cert_id}")
+async def verify_certificate(cert_id: str):
+    doc = await db.certificates.find_one({"certificateId": cert_id})
+    if not doc:
+        return {"found": False, "certificateId": cert_id}
+    doc = clean(doc)
+    doc["found"] = True
+    return doc
+
+
+# ------------------------- Admin -------------------------
+@api_router.get("/admin/stats")
+async def admin_stats():
+    total_workers = await db.users.count_documents({})
+    certs = await db.certificates.count_documents({})
+    attempts = await db.attempts.find().to_list(10000)
+    completed = len({a["userId"] for a in attempts if a.get("passed")})
+    passed = len([a for a in attempts if a.get("passed")])
+    total_att = len(attempts) if attempts else 1
+    pass_rate = round(passed / total_att * 100)
+    return {
+        "totalWorkers": total_workers,
+        "trainingCompleted": completed,
+        "passRate": pass_rate,
+        "certificatesIssued": certs,
+    }
+
+
+@api_router.get("/admin/workers")
+async def admin_workers():
+    users = await db.users.find().sort("createdAt", -1).to_list(2000)
+    result = []
+    for u in users:
+        u = clean(u)
+        atts = await db.attempts.find({"userId": u["id"]}).to_list(1000)
+        certs = await db.certificates.count_documents({"userId": u["id"]})
+        best = max([a["score"] for a in atts], default=0)
+        result.append({
+            **u,
+            "modulesAttempted": len({a["moduleId"] for a in atts}),
+            "totalAttempts": len(atts),
+            "bestScore": best,
+            "completed": any(a.get("passed") for a in atts),
+            "certificates": certs,
+        })
+    return result
+
+
+@api_router.get("/admin/certificates")
+async def admin_certificates(query: str = Query("")):
+    q = query.strip()
+    filt = {}
+    if q:
+        filt = {"$or": [
+            {"certificateId": {"$regex": q, "$options": "i"}},
+            {"name": {"$regex": q, "$options": "i"}},
+            {"workerId": {"$regex": q, "$options": "i"}},
+        ]}
+    docs = await db.certificates.find(filt).sort("issueDate", -1).to_list(2000)
+    return [clean(d) for d in docs]
+
+
+@api_router.get("/admin/analytics")
+async def admin_analytics():
+    attempts = await db.attempts.find().to_list(10000)
+    by_module = {}
+    for a in attempts:
+        m = a.get("moduleTitle") or a.get("moduleId")
+        d = by_module.setdefault(m, {"module": m, "attempts": 0, "passed": 0, "failed": 0, "scoreSum": 0})
+        d["attempts"] += 1
+        d["scoreSum"] += a.get("score", 0)
+        if a.get("passed"):
+            d["passed"] += 1
+        else:
+            d["failed"] += 1
+    modules = []
+    for d in by_module.values():
+        d["avgScore"] = round(d["scoreSum"] / d["attempts"]) if d["attempts"] else 0
+        modules.append(d)
+    return {"modules": modules}
+
+
+@api_router.post("/admin/seed")
+async def admin_seed():
+    if await db.users.count_documents({}) > 5:
+        return {"seeded": False, "message": "already seeded"}
+    names = ["Rahul Kumar", "Sita Devi", "Amit Soren", "Birsa Munda", "Rekha Kumari",
+             "Vijay Mahato", "Suresh Oraon", "Anita Hansda", "Rakesh Singh", "Mangal Toppo",
+             "Deepak Verma", "Lakshmi Mardi", "Naveen Gupta", "Pooja Kisku", "Ravi Prasad"]
+    sectors = ["Mining", "Steel", "Mica", "Other"]
+    langs = ["hi", "en", "sat"]
+    modules = [("fire", "Fire & Explosion Response"), ("gas", "Gas Leak & Confined Space")]
+    seeded_users = 0
+    for i, nm in enumerate(names):
+        u = User(name=nm, workerId=f"WK-2026-{i+1:03d}", language=random.choice(langs),
+                 sector=random.choice(sectors), ageGroup=random.choice(["18-25", "26-35", "36-45", "46-55"]),
+                 organization="Jharkhand Industrial Corp")
+        await db.users.insert_one(u.dict())
+        seeded_users += 1
+        for mid, mtitle in modules:
+            if random.random() < 0.75:
+                score = random.choice([45, 55, 60, 71, 78, 85, 90, 95, 100])
+                passed = score >= PASS_THRESHOLD
+                rec = {"id": str(uuid.uuid4()), "userId": u.id, "workerName": nm,
+                       "moduleId": mid, "moduleTitle": mtitle, "score": score,
+                       "correct": round(score / 100 * 7), "total": 7, "passed": passed,
+                       "attempts": 1, "durationSec": random.randint(60, 200),
+                       "language": u.language, "completedAt": now_iso()}
+                await db.attempts.insert_one(rec)
+                if passed:
+                    cid = await next_cert_id()
+                    await db.certificates.insert_one({
+                        "certificateId": cid, "userId": u.id, "name": nm, "workerId": u.workerId,
+                        "moduleId": mid, "moduleTitle": mtitle, "score": score,
+                        "issueDate": now_iso(), "verificationStatus": "VERIFIED", "org": ORG_NAME,
+                        "language": u.language,
+                    })
+    return {"seeded": True, "users": seeded_users}
+
+
+app.include_router(api_router)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+
+@app.on_event("shutdown")
+async def shutdown_db_client():
+    client.close()
