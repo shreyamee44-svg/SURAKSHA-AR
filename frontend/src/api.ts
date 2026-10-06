@@ -9,6 +9,7 @@ export type Profile = {
   id?: string; // backend id
   name: string;
   workerId: string;
+  password?: string;
   language: string;
   ageGroup?: string;
   sector?: string;
@@ -26,6 +27,7 @@ export type AttemptResult = {
   durationSec: number;
   attempts?: number;
   completedAt?: string;
+  userId?: string;
 };
 
 export type Certificate = {
@@ -45,6 +47,7 @@ export type Certificate = {
 const PROFILE_KEY = "suraksha.profile";
 const ATTEMPTS_KEY = "suraksha.attempts";
 const CERTS_KEY = "suraksha.certs";
+
 export const LAST_RESULT_KEY = "suraksha.lastResult";
 const ADMIN_TOKEN_KEY = "suraksha.adminToken";
 
@@ -56,6 +59,25 @@ export async function adminLogin(id: string, password: string): Promise<string> 
   });
   await storage.secureSet(ADMIN_TOKEN_KEY, res.access_token);
   return res.access_token;
+}
+export async function userLogin(
+  workerId: string,
+  password: string
+ ): Promise<Profile> {
+  const res = await req<{
+    access_token: string;
+    user: Profile;
+  }>("/users/login", {
+    method: "POST",
+    body: JSON.stringify({
+      workerId,
+      password,
+    }),
+  });
+
+  await saveProfileLocal(res.user);
+
+  return res.user;
 }
 
 export async function getAdminToken(): Promise<string | null> {
@@ -110,12 +132,22 @@ export async function saveProfileLocal(p: Profile): Promise<void> {
 
 export async function registerProfile(p: Profile): Promise<Profile> {
   let result = p;
+
   try {
-    const server = await req<Profile>("/users", { method: "POST", body: JSON.stringify(p) });
-    result = { ...p, id: server.id, createdAt: server.createdAt };
+    const server = await req<Profile>("/users", {
+      method: "POST",
+      body: JSON.stringify(p),
+    });
+
+    result = {
+      ...p,
+      id: server.id,
+      createdAt: server.createdAt,
+    };
   } catch {
     // offline — keep local only
   }
+
   await saveProfileLocal(result);
   return result;
 }
@@ -125,16 +157,42 @@ export async function clearProfile(): Promise<void> {
 }
 
 // ---------------- Attempts (local-first) ----------------
-export async function loadAttempts(): Promise<AttemptResult[]> {
-  return (await storage.getItem<AttemptResult[]>(ATTEMPTS_KEY, [])) || [];
+export async function loadAttempts(profileId?: string): Promise<AttemptResult[]> {
+  const all = (await storage.getItem<AttemptResult[]>(ATTEMPTS_KEY, [])) || [];
+
+  if (!profileId) {
+    return [];
+  }
+
+  return all.filter((attempt) => attempt.userId === profileId);
 }
 
-export async function saveAttempt(profile: Profile | null, a: AttemptResult): Promise<AttemptResult> {
-  const all = await loadAttempts();
-  const priorSame = all.filter((x) => x.moduleId === a.moduleId).length;
-  const withMeta: AttemptResult = { ...a, attempts: priorSame + 1, completedAt: new Date().toISOString() };
+export async function saveAttempt(
+  profile: Profile | null,
+  a: AttemptResult
+): Promise<AttemptResult> {
+  const all =
+    (await storage.getItem<AttemptResult[]>(ATTEMPTS_KEY, [])) || [];
+
+  const userAttempts = profile?.id
+    ? all.filter((x) => x.userId === profile.id)
+    : [];
+
+  const priorSame = userAttempts.filter(
+    (x) => x.moduleId === a.moduleId
+  ).length;
+
+  const withMeta: AttemptResult = {
+    ...a,
+    userId: profile?.id,
+    attempts: priorSame + 1,
+    completedAt: new Date().toISOString(),
+  };
+
   const next = [...all, withMeta];
+
   await storage.setItem(ATTEMPTS_KEY, next);
+
   if (profile?.id) {
     try {
       await req("/attempts", {
@@ -156,6 +214,7 @@ export async function saveAttempt(profile: Profile | null, a: AttemptResult): Pr
       /* offline, stays local */
     }
   }
+
   return withMeta;
 }
 
@@ -170,8 +229,15 @@ export function isModulePassed(attempts: AttemptResult[], moduleId: string): boo
 }
 
 // ---------------- Certificates ----------------
-export async function loadCerts(): Promise<Certificate[]> {
-  return (await storage.getItem<Certificate[]>(CERTS_KEY, [])) || [];
+export async function loadCerts(profileId?: string): Promise<Certificate[]> {
+  const all =
+    (await storage.getItem<Certificate[]>(CERTS_KEY, [])) || [];
+
+  if (!profileId) {
+    return [];
+  }
+
+  return all.filter((cert) => cert.userId === profileId);
 }
 
 function localCertId(): string {
@@ -180,8 +246,14 @@ function localCertId(): string {
   return `JH-SAFE-${year}-${String(n).slice(0, 6)}`;
 }
 
-export async function issueCertificate(profile: Profile, moduleId: string, moduleTitle: string, score: number): Promise<Certificate> {
+export async function issueCertificate(
+  profile: Profile,
+  moduleId: string,
+  moduleTitle: string,
+  score: number
+): Promise<Certificate> {
   let cert: Certificate | null = null;
+
   if (profile.id) {
     try {
       const server = await req<Certificate>("/certificates", {
@@ -196,11 +268,13 @@ export async function issueCertificate(profile: Profile, moduleId: string, modul
           language: profile.language,
         }),
       });
+
       cert = { ...server, synced: true };
     } catch {
       /* offline */
     }
   }
+
   if (!cert) {
     cert = {
       certificateId: localCertId(),
@@ -216,10 +290,25 @@ export async function issueCertificate(profile: Profile, moduleId: string, modul
       synced: false,
     };
   }
-  const all = await loadCerts();
-  const existing = all.find((c) => c.moduleId === moduleId);
-  const next = existing ? all.map((c) => (c.moduleId === moduleId ? cert! : c)) : [...all, cert];
+
+  const all =
+    (await storage.getItem<Certificate[]>(CERTS_KEY, [])) || [];
+
+  const existingIndex = all.findIndex(
+    (c) => c.userId === profile.id && c.moduleId === moduleId
+  );
+
+  let next: Certificate[];
+
+  if (existingIndex !== -1) {
+    next = [...all];
+    next[existingIndex] = cert;
+  } else {
+    next = [...all, cert];
+  }
+
   await storage.setItem(CERTS_KEY, next);
+
   return cert;
 }
 
@@ -261,4 +350,8 @@ export function useProfile() {
     refresh();
   }, [refresh]);
   return { profile, loading, refresh, setProfile };
+}
+export async function clearLocalTrainingData(): Promise<void> {
+  await storage.removeItem(ATTEMPTS_KEY);
+  await storage.removeItem(CERTS_KEY);
 }

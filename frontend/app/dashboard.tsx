@@ -15,6 +15,8 @@ import {
 import {
   attemptCountFor,
   bestScoreFor,
+  clearLocalTrainingData,
+  clearProfile,
   isModulePassed,
   loadAttempts,
   loadCerts,
@@ -34,18 +36,24 @@ export default function Dashboard() {
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
 
+  const handleLogout = async () => {  
+  await clearProfile();
+  router.replace("/login");
+  };
+
   const [profile, setProfile] = useState<Profile | null>(null);
   const [attempts, setAttempts] = useState<AttemptResult[]>([]);
   const [certs, setCerts] = useState<Certificate[]>([]);
 
   useFocusEffect(
-    useCallback(() => {
-      (async () => {
-        setProfile(await loadProfile());
-        setAttempts(await loadAttempts());
-        setCerts(await loadCerts());
+    useCallback(()=>{
+      (async()=>{
+        const profile = await loadProfile();
+          setProfile(profile);
+          setAttempts(await loadAttempts(profile?.id));
+          setCerts(await loadCerts(profile?.id)); 
       })();
-    }, []),
+    },[]),
   );
 
   const activeModules = MODULES.filter((m) => m.status === "available");
@@ -186,9 +194,13 @@ export default function Dashboard() {
           </Card>
         </View>
 
-        <Pressable style={styles.adminLink} onPress={() => router.push("/admin")} testID="admin-link">
+        <Pressable style={styles.adminLink} onPress={() => router.push("/admin-login")} testID="admin-link">
           <Icon name="view-dashboard-outline" size={18} color={colors.muted} />
           <Text style={styles.adminText}>Admin / Compliance Dashboard</Text>
+        </Pressable>
+        <Pressable style={styles.logoutLink} onPress={handleLogout} testID="user-logout">
+          <Icon name="logout" size={18} color={colors.error} />
+          <Text style={styles.logoutText}>Logout</Text>
         </Pressable>
       </ScrollView>
     </View>
@@ -231,4 +243,6 @@ const useStyles = makeStyles((c) => ({
   actionText: { fontSize: 13, fontWeight: "700", color: c.onSurface, textAlign: "center" },
   adminLink: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, paddingVertical: 14, marginTop: 4 },
   adminText: { fontSize: 13, color: c.muted, fontWeight: "600" },
+  logoutLink:{flexDirection:"row",alignItems:"center",justifyContent: "center",gap: 8,paddingVertical: 14,marginTop: 4,},
+  logoutText:{fontSize: 13,color: c.error,fontWeight: "700",},
 }));

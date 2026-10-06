@@ -26,6 +26,7 @@ export default function RegisterScreen() {
 
   const [name, setName] = useState("");
   const [workerId, setWorkerId] = useState("");
+  const [password, setPassword] = useState("");
   const [age, setAge] = useState<string | null>(null);
   const [sector, setSector] = useState<string | null>(null);
   const [org, setOrg] = useState("");
@@ -38,17 +39,22 @@ export default function RegisterScreen() {
       setError(t("nameRequired"));
       return;
     }
+    if (!password.trim()) {
+      setError("Password is required");
+      return;
+    }
     setError("");
     setSaving(true);
     setLang(prefLang);
     const wid = workerId.trim() || `WK-2026-${Math.floor(100 + Math.random() * 899)}`;
     await registerProfile({
-      name: name.trim(),
-      workerId: wid,
-      language: prefLang,
-      ageGroup: age || undefined,
-      sector: sector || undefined,
-      organization: org.trim() || undefined,
+       name: name.trim(),
+       workerId: wid,
+       password: password.trim(),
+       language: prefLang,
+       ageGroup: age || undefined,
+       sector: sector || undefined,
+       organization: org.trim() || undefined,
     });
     setSaving(false);
     router.replace("/dashboard");
@@ -98,6 +104,17 @@ export default function RegisterScreen() {
             autoCapitalize="characters"
             style={styles.input}
           />
+        </Field>
+        <Field icon="lock" label="Password">
+          <TextInput
+            testID="input-password"
+            value={password}
+            onChangeText={setPassword}
+            placeholder="Enter password"
+            placeholderTextColor={colors.muted}
+            secureTextEntry
+            style={styles.input}
+           />
         </Field>
 
         <Text style={styles.groupLabel}>{t("ageGroup")}</Text>

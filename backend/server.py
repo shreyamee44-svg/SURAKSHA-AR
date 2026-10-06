@@ -42,14 +42,21 @@ def now_iso() -> str:
 class UserCreate(BaseModel):
     name: str
     workerId: str
+    password: str
     language: str = "en"
     ageGroup: Optional[str] = None
     sector: Optional[str] = None
     organization: Optional[str] = None
 
 
-class User(UserCreate):
+class User(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    workerId: str
+    language: str = "en"
+    ageGroup: Optional[str] = None
+    sector: Optional[str] = None
+    organization: Optional[str] = None
     createdAt: str = Field(default_factory=now_iso)
 
 
@@ -79,6 +86,9 @@ class CertificateCreate(BaseModel):
 class AdminLoginIn(BaseModel):
     id: str
     password: str
+class UserLoginIn(BaseModel):
+    workerId: str
+    password: str    
 
 
 # ------------------------- Helpers -------------------------
@@ -109,7 +119,16 @@ def issue_admin_token(admin_id: str) -> str:
     now = datetime.now(timezone.utc)
     payload = {"sub": admin_id, "role": "admin", "iat": now, "exp": now + timedelta(minutes=JWT_MINUTES)}
     return jwt.encode(payload, JWT_SECRET, algorithm=ALGORITHM)
-
+def issue_user_token(user_id: str, worker_id: str) -> str:
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": user_id,
+        "workerId": worker_id,
+        "role": "worker",
+        "iat": now,
+        "exp": now + timedelta(minutes=JWT_MINUTES),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=ALGORITHM)
 
 async def require_admin(creds: Optional[HTTPAuthorizationCredentials] = Depends(bearer)):
     unauthorized = HTTPException(
@@ -137,6 +156,38 @@ async def admin_login(body: AdminLoginIn):
         raise HTTPException(status_code=401, detail="Invalid ID or password")
     return {"access_token": issue_admin_token(body.id.strip()), "token_type": "bearer", "expires_in": JWT_MINUTES * 60}
 
+@api_router.post("/users/login")
+async def user_login(body: UserLoginIn):
+    worker_id = body.workerId.strip()
+
+    user = await db.users.find_one({"workerId": worker_id})
+
+    if not user or not user.get("passwordHash"):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Worker ID or password"
+        )
+
+    valid = bcrypt.checkpw(
+        body.password.encode(),
+        user["passwordHash"].encode()
+    )
+
+    if not valid:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Worker ID or password"
+        )
+
+    return {
+        "access_token": issue_user_token(
+            user["id"],
+            user["workerId"]
+        ),
+        "token_type": "bearer",
+        "expires_in": JWT_MINUTES * 60,
+        "user": User(**clean(user)).dict(),
+    }
 
 @api_router.get("/admin/me")
 async def admin_me(admin_id: str = Depends(require_admin)):
@@ -156,11 +207,31 @@ async def config():
 
 @api_router.post("/users", response_model=User)
 async def create_user(payload: UserCreate):
-    existing = await db.users.find_one({"workerId": payload.workerId})
+    worker_id = payload.workerId.strip()
+
+    existing = await db.users.find_one({"workerId": worker_id})
     if existing:
         return User(**clean(existing))
-    user = User(**payload.dict())
-    await db.users.insert_one(user.dict())
+
+    password_hash = bcrypt.hashpw(
+        payload.password.encode(),
+        bcrypt.gensalt()
+    ).decode()
+
+    user = User(
+        name=payload.name.strip(),
+        workerId=worker_id,
+        language=payload.language,
+        ageGroup=payload.ageGroup,
+        sector=payload.sector,
+        organization=payload.organization,
+    )
+
+    record = user.dict()
+    record["passwordHash"] = password_hash
+
+    await db.users.insert_one(record)
+
     return user
 
 

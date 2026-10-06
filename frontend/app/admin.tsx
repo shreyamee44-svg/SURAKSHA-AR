@@ -5,13 +5,11 @@ import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View, useWin
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { Button, Card, Icon } from "@/src/components/ui";
-import { API } from "@/src/api";
+import { adminGet, API } from "@/src/api";
 import { makeStyles, useTheme } from "@/src/theme";
 
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${API}${path}`);
-  if (!res.ok) throw new Error("failed");
-  return res.json();
+  return adminGet<T>(path);
 }
 
 type Stats = { totalWorkers: number; trainingCompleted: number; passRate: number; certificatesIssued: number };
